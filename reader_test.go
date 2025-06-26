@@ -3,12 +3,12 @@ package reader
 import (
 	"context"
 	"fmt"
-	"github.com/whosonfirst/go-whosonfirst-iterate/v2/iterator"
 	"io"
 	"net/url"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
+
+	"github.com/whosonfirst/go-whosonfirst-iterate/v3"
 )
 
 func TestReaderEmitter(t *testing.T) {
@@ -27,34 +27,58 @@ func TestReaderEmitter(t *testing.T) {
 	q := url.Values{}
 	q.Set("reader", reader_uri)
 
-	tests := map[string]int32{
+	tests := map[string]int{
 		fmt.Sprintf("reader://?%s", q.Encode()):                                                 1,
 		fmt.Sprintf("reader://?include=properties.sfomuseum:placetype=locality&%s", q.Encode()): 0,
 	}
 
 	for iter_uri, expected_count := range tests {
 
-		count := int32(0)
+		count := 0
 
-		iter_cb := func(ctx context.Context, path string, r io.ReadSeeker, args ...interface{}) error {
-			atomic.AddInt32(&count, 1)
-			return nil
-		}
-
-		iter, err := iterator.NewIterator(ctx, iter_uri, iter_cb)
+		iter, err := iterate.NewIterator(ctx, iter_uri)
 
 		if err != nil {
 			t.Fatalf("Failed to create new iterator, %v", err)
 		}
 
-		err = iter.IterateURIs(ctx, "102/527/513/102527513.geojson")
+		for rec, err := range iter.Iterate(ctx, "102/527/513/102527513.geojson") {
 
-		if err != nil {
-			t.Fatalf("Failed to iterate %s, %v", abs_path, err)
+			if err != nil {
+				t.Fatalf("Failed to walk file, %v", err)
+				break
+			}
+
+			defer rec.Body.Close()
+			_, err = io.ReadAll(rec.Body)
+
+			if err != nil {
+				t.Fatalf("Failed to read body for %s, %v", rec.Path, err)
+			}
+
+			_, err = rec.Body.Seek(0, 0)
+
+			if err != nil {
+				t.Fatalf("Failed to rewind body for %s, %v", rec.Path, err)
+			}
+
+			_, err = io.ReadAll(rec.Body)
+
+			if err != nil {
+				t.Fatalf("Failed second read body for %s, %v", rec.Path, err)
+			}
+
+			count += 1
 		}
 
 		if count != expected_count {
-			t.Fatalf("Unexpected count: %d", count)
+			t.Fatalf("Unexpected count (%s): %d", iter_uri, count)
+		}
+
+		err = iter.Close()
+
+		if err != nil {
+			t.Fatalf("Failed to close iterator, %v", err)
 		}
 	}
 }

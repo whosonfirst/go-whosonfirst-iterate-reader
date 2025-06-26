@@ -1,4 +1,4 @@
-module github.com/whosonfirst/go-whosonfirst-iterate-reader
+module github.com/whosonfirst/go-whosonfirst-iterate-reader/v3
 
 go 1.24
 
