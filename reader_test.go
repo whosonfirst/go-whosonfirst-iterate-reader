@@ -11,7 +11,7 @@ import (
 	"github.com/whosonfirst/go-whosonfirst-iterate/v3"
 )
 
-func TestReaderEmitter(t *testing.T) {
+func TestReaderIterator(t *testing.T) {
 
 	ctx := context.Background()
 
