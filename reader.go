@@ -3,28 +3,36 @@ package reader
 import (
 	"context"
 	"fmt"
-	"github.com/whosonfirst/go-reader"
-	"github.com/whosonfirst/go-whosonfirst-iterate/v2/emitter"
-	"github.com/whosonfirst/go-whosonfirst-iterate/v2/filters"
-	"github.com/whosonfirst/go-whosonfirst-uri"
+	"iter"
+	"log/slog"
 	"net/url"
+	"sync/atomic"
+
+	"github.com/whosonfirst/go-reader"
+	"github.com/whosonfirst/go-whosonfirst-iterate/v3"
+	"github.com/whosonfirst/go-whosonfirst-iterate/v3/filters"
+	wof_uri "github.com/whosonfirst/go-whosonfirst-uri"
 )
 
 func init() {
 	ctx := context.Background()
-	emitter.RegisterEmitter(ctx, "reader", NewReaderEmitter)
+	iterate.RegisterIterator(ctx, "reader", NewReaderIterator)
 }
 
-// GitEmitter implements the `Emitter` interface for crawling records with a `whosonfirst/go-reader.Reader` instance.
-type ReaderEmitter struct {
-	emitter.Emitter
+// GitIterator implements the `Iterator` interface for crawling records with a `whosonfirst/go-reader.Reader` instance.
+type ReaderIterator struct {
+	iterate.Iterator
 	// reader is the `whosonfirst/go-reader.Reader` instance used to reade documents
 	reader reader.Reader
 	// filters is a `filters.Filters` instance used to include or exclude specific records from being crawled.
 	filters filters.Filters
+	// seen is the count of documents that have been processed.
+	seen int64
+	// iterating is a boolean value indicating whether records are still being iterated.
+	iterating *atomic.Bool
 }
 
-// NewGitEmitter() returns a new `GitEmitter` instance configured by 'uri' in the form of:
+// NewReaderIterator() returns a new `GitIterator` instance configured by 'uri' in the form of:
 //
 //	reader://?{PARAMETERS}
 //
@@ -34,7 +42,7 @@ type ReaderEmitter struct {
 // * `?include_mode=` A valid `aaronland/go-json-query` query mode string for testing inclusion rules.
 // * `?exclude_mode=` A valid `aaronland/go-json-query` query mode string for testing exclusion rules.
 // * `?reader=` A valid `whosonfirst/go-reader` URI used to create the underlying reader instance.
-func NewReaderEmitter(ctx context.Context, uri string) (emitter.Emitter, error) {
+func NewReaderIterator(ctx context.Context, uri string) (iterate.Iterator, error) {
 
 	u, err := url.Parse(uri)
 
@@ -58,56 +66,103 @@ func NewReaderEmitter(ctx context.Context, uri string) (emitter.Emitter, error) 
 		return nil, fmt.Errorf("Failed to derive query filters from URI, %w", err)
 	}
 
-	idx := &ReaderEmitter{
-		reader:  r,
-		filters: f,
+	idx := &ReaderIterator{
+		reader:    r,
+		filters:   f,
+		seen:      int64(0),
+		iterating: new(atomic.Bool),
 	}
 
 	return idx, nil
 }
 
-// WalkURI() reads 'path' using the underlying reader (if not excluded by any filters specified when `idx` was
-// created) and invokes 'index_cb'.
-func (idx *ReaderEmitter) WalkURI(ctx context.Context, index_cb emitter.EmitterCallbackFunc, path string) error {
+// Iterate will return an `iter.Seq2[*Record, error]` for each record encountered in 'uris'.
+func (it *ReaderIterator) Iterate(ctx context.Context, uris ...string) iter.Seq2[*iterate.Record, error] {
 
-	id, uri_args, err := uri.ParseURI(path)
+	return func(yield func(rec *iterate.Record, err error) bool) {
 
-	if err != nil {
-		return fmt.Errorf("Failed to parse '%s', %w", path, err)
-	}
+		it.iterating.Swap(true)
+		defer it.iterating.Swap(false)
 
-	rel_path, err := uri.Id2RelPath(id, uri_args)
+		for _, uri := range uris {
 
-	if err != nil {
-		return fmt.Errorf("Failed to derived relative path for '%s', %w", path, err)
-	}
+			logger := slog.Default()
+			logger = logger.With("uri", uri)
 
-	fh, err := idx.reader.Read(ctx, rel_path)
+			id, uri_args, err := wof_uri.ParseURI(uri)
 
-	if err != nil {
-		return fmt.Errorf("Failed to read path (%s) for '%s', %w", rel_path, path, err)
-	}
+			if err != nil {
 
-	defer fh.Close()
+				if !yield(nil, fmt.Errorf("Failed to parse '%s', %w", uri, err)) {
+					return
+				}
 
-	if idx.filters != nil {
+				continue
+			}
 
-		ok, err := idx.filters.Apply(ctx, fh)
+			rel_path, err := wof_uri.Id2RelPath(id, uri_args)
 
-		if err != nil {
-			return fmt.Errorf("Failed to apply filters to %s, %w", rel_path, err)
+			if err != nil {
+
+				if !yield(nil, fmt.Errorf("Failed to derived relative path for '%s', %w", uri, err)) {
+					return
+				}
+
+				continue
+			}
+
+			atomic.AddInt64(&it.seen, 1)
+
+			logger = logger.With("path", rel_path)
+
+			r, err := it.reader.Read(ctx, rel_path)
+
+			if err != nil {
+
+				if !yield(nil, fmt.Errorf("Failed to read path (%s) for '%s', %w", rel_path, uri, err)) {
+					return
+				}
+
+				continue
+			}
+
+			if it.filters != nil {
+
+				ok, err := iterate.ApplyFilters(ctx, r, it.filters)
+
+				if err != nil {
+					r.Close()
+					if !yield(nil, fmt.Errorf("Failed to apply filters to %s, %w", rel_path, err)) {
+						return
+					}
+
+					continue
+				}
+
+				if !ok {
+					r.Close()
+					continue
+				}
+
+			}
+
+			rec := iterate.NewRecord(rel_path, r)
+			yield(rec, nil)
 		}
-
-		if !ok {
-			return nil
-		}
-
-		_, err = fh.Seek(0, 0)
-
-		if err != nil {
-			return fmt.Errorf("Failed to reset filehandle for %s, %w", rel_path, err)
-		}
 	}
+}
 
-	return index_cb(ctx, rel_path, fh)
+// Seen() returns the total number of records processed so far.
+func (it *ReaderIterator) Seen() int64 {
+	return atomic.LoadInt64(&it.seen)
+}
+
+// IsIterating() returns a boolean value indicating whether 'it' is still processing documents.
+func (it *ReaderIterator) IsIterating() bool {
+	return it.iterating.Load()
+}
+
+// Close performs any implementation specific tasks before terminating the iterator.
+func (it *ReaderIterator) Close() error {
+	return nil
 }

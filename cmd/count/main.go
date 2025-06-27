@@ -6,15 +6,15 @@ import (
 
 	_ "github.com/whosonfirst/go-whosonfirst-iterate-reader/v3"
 
-	"github.com/whosonfirst/go-whosonfirst-iterate/v3/app/emit"
+	"github.com/whosonfirst/go-whosonfirst-iterate/v3/app/count"
 )
 
 func main() {
 
 	ctx := context.Background()
-	err := emit.Run(ctx)
+	err := count.Run(ctx)
 
 	if err != nil {
-		log.Fatalf("Failed to emit records, %v", err)
+		log.Fatalf("Failed to count records, %v", err)
 	}
 }
