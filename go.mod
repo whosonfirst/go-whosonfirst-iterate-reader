@@ -3,7 +3,7 @@ module github.com/whosonfirst/go-whosonfirst-iterate-reader/v3
 go 1.24
 
 require (
-	github.com/whosonfirst/go-reader v1.1.0
+	github.com/whosonfirst/go-reader/v2 v2.0.0
 	github.com/whosonfirst/go-whosonfirst-iterate/v3 v3.0.0
 	github.com/whosonfirst/go-whosonfirst-uri v1.3.0
 )

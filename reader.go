@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"sync/atomic"
 
-	"github.com/whosonfirst/go-reader"
+	"github.com/whosonfirst/go-reader/v2"
 	"github.com/whosonfirst/go-whosonfirst-iterate/v3"
 	"github.com/whosonfirst/go-whosonfirst-iterate/v3/filters"
 	wof_uri "github.com/whosonfirst/go-whosonfirst-uri"
